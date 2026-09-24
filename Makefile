@@ -3,15 +3,14 @@ CC ?= cc
 CPPFLAGS := -D_POSIX_C_SOURCE=200809L -Iinclude -I../rictus/include -I../ABI/includes
 CFLAGS := -std=c17 -Wall -Wextra -Wpedantic -fPIC
 LDFLAGS := -shared
-LDLIBS := -pthread
+LDLIBS := -lcrypto -pthread
 
 BUILD_DIR := build/linux
 TARGET := $(BUILD_DIR)/investigation.so
 
 SOURCES := \
 	src/investigation.c \
-	src/production.c \
-	src/sha256.c
+	src/production.c
 
 .PHONY: all clean
 
