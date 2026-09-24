@@ -253,7 +253,13 @@ int rictus_investigation_candidate_create(const char *intel_id)
     if (!retain_hash(candidate, evidence, timestamp, artifact, hash) || !index_append(r->id, candidate)) goto done;
     printf("[INVESTIGATION] Candidate created id=%s source=%s sha256=%s\n", candidate, r->id, hash); result = RICTUS_INVESTIGATION_OK;
 done:
-    if (file) fclose(file); if (result != RICTUS_INVESTIGATION_OK) { unlink(artifact); unlink(history); } free(r); return result;
+    if (file) fclose(file);
+    if (result != RICTUS_INVESTIGATION_OK) {
+        unlink(artifact);
+        unlink(history);
+    }
+    free(r);
+    return result;
 }
 
 int rictus_investigation_watch_start(const char *candidate)
@@ -478,5 +484,5 @@ const rictus_module_descriptor_t rictus_investigation_descriptor = {
     RICTUS_MODULE_API_MAJOR, RICTUS_MODULE_API_MINOR, qualify, start, stop
 };
 
-RICTUS_EXPORT const rictus_module_descriptor_t *stnlabz_module_get_descriptor(void)
+const rictus_module_descriptor_t *stnlabz_module_get_descriptor(void)
 { return &rictus_investigation_descriptor; }
