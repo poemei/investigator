@@ -1,26 +1,28 @@
 /* STN-LABZ Rictus Investigation module.
  * AI-assisted implementation: OpenAI Codex, 2026-08-27. Human review required. */
-#ifdef _WIN32
-#define WIN32_LEAN_AND_MEAN
-#include <windows.h>
-#include <bcrypt.h>
-#else
-#include "win_compat_posix.h"
-#include "sha256.h"
-#endif
+#include <errno.h>
+#include <pthread.h>
+#include <sys/stat.h>
+#include <sys/types.h>
+#include <time.h>
+#include <unistd.h>
+
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+
+#include "posix_compat.h"
+#include "sha256.h"
 #include "investigation.h"
 #include "production.h"
 
 #define RECORD_PATH "intelligence.records"
-#define OUTPUT_DIR "C:\\stn-labz\\reports\\Investigation"
-#define INDEX_PATH OUTPUT_DIR "\\investigations.tsv"
-#define CURSOR_PATH OUTPUT_DIR "\\watch-cursors.tsv"
-#define RELATION_PATH OUTPUT_DIR "\\evidence-relationships.tsv"
-#define NOTICE_PATH OUTPUT_DIR "\\material-change.notices"
-#define NOTICE_DELIVERED_PATH OUTPUT_DIR "\\material-change.delivered"
+#define OUTPUT_DIR "state/investigation"
+#define INDEX_PATH OUTPUT_DIR "/investigations.tsv"
+#define CURSOR_PATH OUTPUT_DIR "/watch-cursors.tsv"
+#define RELATION_PATH OUTPUT_DIR "/evidence-relationships.tsv"
+#define NOTICE_PATH OUTPUT_DIR "/material-change.notices"
+#define NOTICE_DELIVERED_PATH OUTPUT_DIR "/material-change.delivered"
 #define LINE_MAXIMUM 65536
 #define PATH_MAXIMUM 1024
 
@@ -31,8 +33,11 @@ typedef struct investigation_record {
 
 static int g_initialized;
 static const rictus_module_host_t *g_host;
-static HANDLE g_worker;
-static HANDLE g_stop_event;
+static pthread_t g_worker;
+static int g_worker_active;
+static pthread_mutex_t g_stop_mutex = PTHREAD_MUTEX_INITIALIZER;
+static pthread_cond_t g_stop_cond = PTHREAD_COND_INITIALIZER;
+static int g_stop_requested;
 typedef enum evidence_relationship { REL_SUPPORTING=1, REL_OPPOSING, REL_CONTRADICTORY, REL_DUPLICATE, REL_CONTEXTUAL, REL_NEGATIVE } evidence_relationship_t;
 static const char *relationship_name(evidence_relationship_t r){switch(r){case REL_SUPPORTING:return "SUPPORTING";case REL_OPPOSING:return "OPPOSING";case REL_CONTRADICTORY:return "CONTRADICTORY";case REL_DUPLICATE:return "DUPLICATE";case REL_CONTEXTUAL:return "CONTEXTUAL";case REL_NEGATIVE:return "NEGATIVE";default:return "UNRESOLVED";}}
 
@@ -111,49 +116,38 @@ static void candidate_id_for(const char *intelligence_id, char output[32])
 
 static void timestamp_now(char output[32])
 {
-    SYSTEMTIME t; GetSystemTime(&t);
-    sprintf_s(output, 32, "%04u-%02u-%02uT%02u:%02u:%02uZ", t.wYear, t.wMonth, t.wDay, t.wHour, t.wMinute, t.wSecond);
+    time_t current = time(NULL);
+    struct tm utc;
+    if (current != (time_t)-1 && gmtime_r(&current, &utc) != NULL)
+        strftime(output, 32, "%Y-%m-%dT%H:%M:%SZ", &utc);
+    else
+        output[0] = '\0';
 }
 
 static int ensure_directory(void)
 {
-    DWORD a;
-    (void)CreateDirectoryA("C:\\stn-labz", NULL);
-    (void)CreateDirectoryA("C:\\stn-labz\\reports", NULL);
-    if (!CreateDirectoryA(OUTPUT_DIR, NULL) && GetLastError() != ERROR_ALREADY_EXISTS) return 0;
-    a = GetFileAttributesA(OUTPUT_DIR);
-    return a != INVALID_FILE_ATTRIBUTES && (a & FILE_ATTRIBUTE_DIRECTORY) != 0;
+    struct stat st;
+    if (mkdir("state", 0750) != 0 && errno != EEXIST) return 0;
+    if (mkdir(OUTPUT_DIR, 0750) != 0 && errno != EEXIST) return 0;
+    return stat(OUTPUT_DIR, &st) == 0 && S_ISDIR(st.st_mode);
 }
 
 static int paths_for(const char *candidate, char artifact[PATH_MAXIMUM], char history[PATH_MAXIMUM])
 {
     if (!valid_id(candidate, "CAN-")) return 0;
-    sprintf_s(artifact, PATH_MAXIMUM, "%s\\%s.candidate.md", OUTPUT_DIR, candidate);
-    sprintf_s(history, PATH_MAXIMUM, "%s\\%s.sha256.history", OUTPUT_DIR, candidate);
+    sprintf_s(artifact, PATH_MAXIMUM, "%s/%s.candidate.md", OUTPUT_DIR, candidate);
+    sprintf_s(history, PATH_MAXIMUM, "%s/%s.sha256.history", OUTPUT_DIR, candidate);
     return 1;
 }
 
 static int sha256_file(const char *path, char output[65])
 {
-#ifdef _WIN32
-    BCRYPT_ALG_HANDLE alg = NULL; BCRYPT_HASH_HANDLE hash = NULL;
-    DWORD object_size = 0, cb = 0, i; unsigned char digest[32], buffer[8192], *object = NULL;
-    FILE *file = NULL; size_t count; int ok = 0;
-    if (BCryptOpenAlgorithmProvider(&alg, BCRYPT_SHA256_ALGORITHM, NULL, 0)) goto done;
-    if (BCryptGetProperty(alg, BCRYPT_OBJECT_LENGTH, (PUCHAR)&object_size, sizeof(object_size), &cb, 0)) goto done;
-    object = (unsigned char *)malloc(object_size); if (!object) goto done;
-    if (BCryptCreateHash(alg, &hash, object, object_size, NULL, 0, 0)) goto done;
-    if (fopen_s(&file, path, "rb") != 0 || !file) goto done;
-    while ((count = fread(buffer, 1, sizeof(buffer), file)) > 0)
-        if (BCryptHashData(hash, buffer, (ULONG)count, 0)) goto done;
-    if (ferror(file) || BCryptFinishHash(hash, digest, sizeof(digest), 0)) goto done;
-    for (i = 0; i < 32; ++i) sprintf_s(output + i * 2, 3, "%02x", digest[i]);
-    output[64] = '\0'; ok = 1;
-done:
-    if (file) fclose(file); if (hash) BCryptDestroyHash(hash); if (alg) BCryptCloseAlgorithmProvider(alg, 0); free(object); return ok;
-#else
-    rictus_sha256_t context; unsigned char digest[32], buffer[8192];
-    FILE *file = NULL; size_t count; unsigned int i;
+    rictus_sha256_t context;
+    unsigned char digest[32], buffer[8192];
+    FILE *file = NULL;
+    size_t count;
+    unsigned int i;
+
     if (fopen_s(&file, path, "rb") != 0 || file == NULL) return 0;
     rictus_sha256_init(&context);
     while ((count = fread(buffer, 1, sizeof(buffer), file)) > 0)
@@ -161,11 +155,9 @@ done:
     if (ferror(file)) { fclose(file); return 0; }
     rictus_sha256_final(&context, digest);
     fclose(file);
-    for (i = 0; i < 32; ++i)
-        snprintf(output + i * 2, 3, "%02x", digest[i]);
+    for (i = 0; i < 32; ++i) snprintf(output + i * 2, 3, "%02x", digest[i]);
     output[64] = '\0';
     return 1;
-#endif
 }
 
 static int retain_hash(const char *candidate, const char *event, const char *timestamp,
@@ -184,7 +176,7 @@ static int index_find(const char *key, char candidate[32], int *active)
     if (fopen_s(&file, INDEX_PATH, "r") != 0 || !file) return 0;
     while (fgets(line, sizeof(line), file)) {
         char intel[32], can[32], state[16];
-        if (sscanf_s(line, "%31s\t%31s\t%15s", intel, (unsigned)_countof(intel), can, (unsigned)_countof(can), state, (unsigned)_countof(state)) == 3 &&
+        if (sscanf(line, "%31s\t%31s\t%15s", intel, can, state) == 3 &&
             (_stricmp(key, intel) == 0 || _stricmp(key, can) == 0)) {
             strcpy_s(candidate, 32, can); if (active) *active = _stricmp(state, "ACTIVE") == 0; found = 1; break;
         }
@@ -208,13 +200,13 @@ static int index_activate(const char *candidate)
     if (fopen_s(&out, temp, "w") != 0 || !out) { fclose(in); return 0; }
     while (fgets(line, sizeof(line), in)) {
         char intel[32], can[32], state[16];
-        if (sscanf_s(line, "%31s\t%31s\t%15s", intel, (unsigned)_countof(intel), can, (unsigned)_countof(can), state, (unsigned)_countof(state)) == 3) {
+        if (sscanf(line, "%31s\t%31s\t%15s", intel, can, state) == 3) {
             if (_stricmp(can, candidate) == 0) { strcpy_s(state, sizeof(state), "ACTIVE"); found = 1; }
             fprintf(out, "%s\t%s\t%s\n", intel, can, state);
         }
     }
     fclose(in); if (fflush(out) != 0) found = 0; fclose(out);
-    if (!found || !MoveFileExA(temp, INDEX_PATH, MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH)) { DeleteFileA(temp); return 0; }
+    if (!found || rename(temp, INDEX_PATH) != 0) { unlink(temp); return 0; }
     return 1;
 }
 
@@ -232,7 +224,7 @@ int rictus_investigation_candidate_create(const char *intel_id)
     if (!load_record(intel_id, r)) { free(r); return RICTUS_INVESTIGATION_NOT_FOUND; }
     candidate_id_for(intel_id, candidate); timestamp_now(timestamp); sprintf_s(evidence, sizeof(evidence), "SE-%s-0001", candidate + 4);
     paths_for(candidate, artifact, history);
-    if (GetFileAttributesA(artifact) != INVALID_FILE_ATTRIBUTES) { result = RICTUS_INVESTIGATION_ALREADY_EXISTS; goto done; }
+    if (access(artifact, F_OK) == 0) { result = RICTUS_INVESTIGATION_ALREADY_EXISTS; goto done; }
     if (fopen_s(&file, artifact, "wb") != 0 || !file) goto done;
     if (fprintf(file,
         "# Investigation Candidate %s\n\n- Status: CANDIDATE\n- Watch: INACTIVE\n- Originating intelligence: %s\n"
@@ -254,7 +246,7 @@ int rictus_investigation_candidate_create(const char *intel_id)
     if (!retain_hash(candidate, evidence, timestamp, artifact, hash) || !index_append(r->id, candidate)) goto done;
     printf("[INVESTIGATION] Candidate created id=%s source=%s sha256=%s\n", candidate, r->id, hash); result = RICTUS_INVESTIGATION_OK;
 done:
-    if (file) fclose(file); if (result != RICTUS_INVESTIGATION_OK) { DeleteFileA(artifact); DeleteFileA(history); } free(r); return result;
+    if (file) fclose(file); if (result != RICTUS_INVESTIGATION_OK) { unlink(artifact); unlink(history); } free(r); return result;
 }
 
 int rictus_investigation_watch_start(const char *candidate)
@@ -304,11 +296,11 @@ static int correlate(const investigation_record_t *origin,const investigation_re
     return 0;
 }
 
-static unsigned long cursor_get(const char *candidate){FILE *f=NULL;char line[128],id[32];unsigned long value,last=0;if(fopen_s(&f,CURSOR_PATH,"r")!=0||!f)return 0;while(fgets(line,sizeof(line),f))if(sscanf_s(line,"%31s\t%lu",id,(unsigned)_countof(id),&value)==2&&_stricmp(id,candidate)==0)last=value;fclose(f);return last;}
+static unsigned long cursor_get(const char *candidate){FILE *f=NULL;char line[128],id[32];unsigned long value,last=0;if(fopen_s(&f,CURSOR_PATH,"r")!=0||!f)return 0;while(fgets(line,sizeof(line),f))if(sscanf(line,"%31s\t%lu",id,&value)==2&&_stricmp(id,candidate)==0)last=value;fclose(f);return last;}
 static void cursor_set(const char *candidate,unsigned long value){FILE *f=NULL;if(fopen_s(&f,CURSOR_PATH,"a")==0&&f){fprintf(f,"%s\t%lu\n",candidate,value);fclose(f);}}
 static int notice_delivered(const char *id){FILE *f=NULL;char line[64];if(fopen_s(&f,NOTICE_DELIVERED_PATH,"r")!=0||!f)return 0;while(fgets(line,sizeof(line),f)){line[strcspn(line,"\r\n")]=0;if(_stricmp(line,id)==0){fclose(f);return 1;}}fclose(f);return 0;}
 static void notice_queue(const char *candidate,const char *intel,const char *rule){FILE *f=NULL;char id[32];sprintf_s(id,sizeof(id),"INVN-%08lX",id_hash(intel));if(fopen_s(&f,NOTICE_PATH,"a")==0&&f){fprintf(f,"%s\t%s\t%s\t%s\n",id,candidate,intel,rule);fclose(f);}}
-static void notice_drain(void){FILE *f=NULL,*done=NULL;char line[256],id[32],candidate[32],intel[32],rule[128],message[390];if(!g_host||!g_host->send_message)return;if(fopen_s(&f,NOTICE_PATH,"r")!=0||!f)return;while(fgets(line,sizeof(line),f))if(sscanf_s(line,"%31s\t%31s\t%31s\t%127[^\r\n]",id,(unsigned)_countof(id),candidate,(unsigned)_countof(candidate),intel,(unsigned)_countof(intel),rule,(unsigned)_countof(rule))==4&&!notice_delivered(id)){sprintf_s(message,sizeof(message),"PM STN_Boss :Investigation material change | %s | new supporting evidence %s | rule=%s | !inv show %s",candidate,intel,rule,candidate);if(!g_host->send_message(message))break;if(fopen_s(&done,NOTICE_DELIVERED_PATH,"a")!=0||!done)break;fprintf(done,"%s\n",id);fclose(done);done=NULL;}fclose(f);}
+static void notice_drain(void){FILE *f=NULL,*done=NULL;char line[256],id[32],candidate[32],intel[32],rule[128],message[390];if(!g_host||!g_host->send_message)return;if(fopen_s(&f,NOTICE_PATH,"r")!=0||!f)return;while(fgets(line,sizeof(line),f))if(sscanf(line,"%31s\t%31s\t%31s\t%127[^\r\n]",id,candidate,intel,rule)==4&&!notice_delivered(id)){sprintf_s(message,sizeof(message),"PM STN_Boss :Investigation material change | %s | new supporting evidence %s | rule=%s | !inv show %s",candidate,intel,rule,candidate);if(!g_host->send_message(message))break;if(fopen_s(&done,NOTICE_DELIVERED_PATH,"a")!=0||!done)break;fprintf(done,"%s\n",id);fclose(done);done=NULL;}fclose(f);}
 
 static void scan_watch(const char *intel_id,const char *candidate)
 {
@@ -317,8 +309,37 @@ static void scan_watch(const char *intel_id,const char *candidate)
     fclose(f);if(row!=cursor)cursor_set(candidate,row);free(line);
 }
 
-static void scan_active_watches(void){FILE *f=NULL;char line[256];if(fopen_s(&f,INDEX_PATH,"r")!=0||!f){notice_drain();return;}while(fgets(line,sizeof(line),f)){char intel[32],candidate[32],state[16];if(sscanf_s(line,"%31s\t%31s\t%15s",intel,(unsigned)_countof(intel),candidate,(unsigned)_countof(candidate),state,(unsigned)_countof(state))==3&&_stricmp(state,"ACTIVE")==0)scan_watch(intel,candidate);}fclose(f);notice_drain();}
-static DWORD WINAPI investigation_worker(LPVOID unused){(void)unused;while(WaitForSingleObject(g_stop_event,10000)==WAIT_TIMEOUT)scan_active_watches();return 0;}
+static void scan_active_watches(void){FILE *f=NULL;char line[256];if(fopen_s(&f,INDEX_PATH,"r")!=0||!f){notice_drain();return;}while(fgets(line,sizeof(line),f)){char intel[32],candidate[32],state[16];if(sscanf(line,"%31s\t%31s\t%15s",intel,candidate,state)==3&&_stricmp(state,"ACTIVE")==0)scan_watch(intel,candidate);}fclose(f);notice_drain();}
+static int investigation_stop_wait(unsigned long milliseconds)
+{
+    int stopped;
+    struct timespec deadline;
+
+    pthread_mutex_lock(&g_stop_mutex);
+    if (!g_stop_requested && milliseconds > 0) {
+        clock_gettime(CLOCK_REALTIME, &deadline);
+        deadline.tv_sec += (time_t)(milliseconds / 1000UL);
+        deadline.tv_nsec += (long)(milliseconds % 1000UL) * 1000000L;
+        if (deadline.tv_nsec >= 1000000000L) {
+            ++deadline.tv_sec;
+            deadline.tv_nsec -= 1000000000L;
+        }
+        while (!g_stop_requested) {
+            int result = pthread_cond_timedwait(&g_stop_cond, &g_stop_mutex, &deadline);
+            if (result == ETIMEDOUT || result != 0) break;
+        }
+    }
+    stopped = g_stop_requested;
+    pthread_mutex_unlock(&g_stop_mutex);
+    return stopped;
+}
+
+static void *investigation_worker(void *unused)
+{
+    (void)unused;
+    while (!investigation_stop_wait(10000UL)) scan_active_watches();
+    return NULL;
+}
 
 int rictus_investigation_assess(const char *candidate)
 { char resolved[32]; int active = 0; if (!g_initialized) return RICTUS_INVESTIGATION_NOT_ACTIVE; if (!valid_id(candidate, "CAN-")) return RICTUS_INVESTIGATION_INVALID_ARGUMENT; if (!index_find(candidate, resolved, &active)) return RICTUS_INVESTIGATION_NOT_FOUND; return active ? RICTUS_INVESTIGATION_OK : RICTUS_INVESTIGATION_NOT_ACTIVE; }
@@ -358,7 +379,7 @@ static rictus_module_result_t command_inv(const rictus_module_command_t *command
     if(_strnicmp(command->arguments,"show ",5)==0){
         char candidate[32],id[32],rel[32],rule[96],stamp[32],hash[65];unsigned int supporting=0,opposing=0,contradictory=0,duplicate=0,contextual=0,negative=0;FILE *relations=NULL;
         strcpy_s(candidate,sizeof(candidate),command->arguments+5);if(!valid_id(candidate,"CAN-"))return reply(context,"Usage: !inv show CAN-XXXXXXXX")?RICTUS_MODULE_OK:RICTUS_MODULE_ERR_START_FAILED;
-        if(fopen_s(&relations,RELATION_PATH,"r")==0&&relations){while(fgets(line,sizeof(line),relations))if(sscanf_s(line,"v=1\t%31s\t%31s\t%31s\t%95[^\t]\t%31s\t%64s",id,(unsigned)_countof(id),response,(unsigned)_countof(response),rel,(unsigned)_countof(rel),rule,(unsigned)_countof(rule),stamp,(unsigned)_countof(stamp),hash,(unsigned)_countof(hash))==6&&_stricmp(id,candidate)==0){if(_stricmp(rel,"SUPPORTING")==0)++supporting;else if(_stricmp(rel,"OPPOSING")==0)++opposing;else if(_stricmp(rel,"CONTRADICTORY")==0)++contradictory;else if(_stricmp(rel,"DUPLICATE")==0)++duplicate;else if(_stricmp(rel,"CONTEXTUAL")==0)++contextual;else if(_stricmp(rel,"NEGATIVE")==0)++negative;}fclose(relations);}
+        if(fopen_s(&relations,RELATION_PATH,"r")==0&&relations){while(fgets(line,sizeof(line),relations))if(sscanf(line,"v=1\t%31s\t%31s\t%31s\t%95[^\t]\t%31s\t%64s",id,response,rel,rule,stamp,hash)==6&&_stricmp(id,candidate)==0){if(_stricmp(rel,"SUPPORTING")==0)++supporting;else if(_stricmp(rel,"OPPOSING")==0)++opposing;else if(_stricmp(rel,"CONTRADICTORY")==0)++contradictory;else if(_stricmp(rel,"DUPLICATE")==0)++duplicate;else if(_stricmp(rel,"CONTEXTUAL")==0)++contextual;else if(_stricmp(rel,"NEGATIVE")==0)++negative;}fclose(relations);}
         sprintf_s(response,sizeof(response),"%s | supporting=%u opposing=%u contradictory=%u negative=%u duplicate=%u contextual=%u",candidate,supporting,opposing,contradictory,negative,duplicate,contextual);if(!reply(context,response))return RICTUS_MODULE_ERR_START_FAILED;
         sprintf_s(response,sizeof(response),"Likelihood=%s | confidence=%s | human review=%s",supporting>=2&&contradictory==0?"LIKELY":"NOT ASSESSED",supporting>=2?"MODERATE":"LOW",contradictory||opposing?"RECOMMENDED":"NOT REQUIRED");if(!reply(context,response))return RICTUS_MODULE_ERR_START_FAILED;
         return reply(context,"No SRT transition, scope expansion, attribution, publication, or remediation is authorized.")?RICTUS_MODULE_OK:RICTUS_MODULE_ERR_START_FAILED;
@@ -419,8 +440,11 @@ static rictus_module_result_t start(const rictus_module_host_t *host)
     if (!host->register_command("watch", command_watch, NULL)) { host->unregister_command("candidate", NULL); goto fail; }
     if (!host->register_command("inv", command_inv, NULL)) { host->unregister_command("watch", NULL); host->unregister_command("candidate", NULL); goto fail; }
     if(!host->register_command("im",command_im,NULL)){host->unregister_command("inv",NULL);host->unregister_command("watch",NULL);host->unregister_command("candidate",NULL);goto fail;}
-    g_stop_event=CreateEventA(NULL,TRUE,FALSE,NULL);if(!g_stop_event)goto fail_commands;
-    g_worker=CreateThread(NULL,0,investigation_worker,NULL,0,NULL);if(!g_worker){CloseHandle(g_stop_event);g_stop_event=NULL;goto fail_commands;}
+    pthread_mutex_lock(&g_stop_mutex);
+    g_stop_requested = 0;
+    pthread_mutex_unlock(&g_stop_mutex);
+    if (pthread_create(&g_worker, NULL, investigation_worker, NULL) != 0) goto fail_commands;
+    g_worker_active = 1;
     printf("[INVESTIGATION] Commands registered: candidate, watch, inv\n"); return RICTUS_MODULE_OK;
 fail_commands: host->unregister_command("im",NULL);host->unregister_command("inv",NULL);host->unregister_command("watch",NULL);host->unregister_command("candidate",NULL);
 fail: g_host = NULL; rictus_investigation_shutdown(); return RICTUS_MODULE_ERR_START_FAILED;
@@ -429,7 +453,14 @@ fail: g_host = NULL; rictus_investigation_shutdown(); return RICTUS_MODULE_ERR_S
 static rictus_module_result_t stop(void)
 {
     int ok = 1;
-    if(g_stop_event)SetEvent(g_stop_event);if(g_worker){if(WaitForSingleObject(g_worker,15000)!=WAIT_OBJECT_0)ok=0;CloseHandle(g_worker);g_worker=NULL;}if(g_stop_event){CloseHandle(g_stop_event);g_stop_event=NULL;}
+    pthread_mutex_lock(&g_stop_mutex);
+    g_stop_requested = 1;
+    pthread_cond_broadcast(&g_stop_cond);
+    pthread_mutex_unlock(&g_stop_mutex);
+    if (g_worker_active) {
+        if (pthread_join(g_worker, NULL) != 0) ok = 0;
+        g_worker_active = 0;
+    }
     if (g_host && g_host->unregister_command) { ok = g_host->unregister_command("im",NULL)&&ok; ok = g_host->unregister_command("inv", NULL) && ok; ok = g_host->unregister_command("watch", NULL) && ok; ok = g_host->unregister_command("candidate", NULL) && ok; }
     g_host = NULL; rictus_investigation_shutdown(); return ok ? RICTUS_MODULE_OK : RICTUS_MODULE_ERR_STOP_FAILED;
 }
