@@ -140,7 +140,6 @@ void rictus_investigation_shutdown(void);
 
 extern const rictus_module_descriptor_t rictus_investigation_descriptor;
 
-RICTUS_EXPORT
 const rictus_module_descriptor_t *stnlabz_module_get_descriptor(void);
 
 #ifdef __cplusplus
