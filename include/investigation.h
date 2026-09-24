@@ -1,9 +1,7 @@
 #ifndef RICTUS_INVESTIGATION_H
 #define RICTUS_INVESTIGATION_H
 
-#include "platform.h"
-
-#include "module.h"
+#include "rictus_module.h"
 
 #define RICTUS_INVESTIGATION_ID "investigation"
 #define RICTUS_INVESTIGATION_NAME "Rictus Investigation"
