@@ -12,7 +12,7 @@
 #include <string.h>
 
 #include "posix_compat.h"
-#include "sha256.h"
+#include <openssl/evp.h>
 #include "investigation.h"
 #include "production.h"
 
@@ -142,22 +142,29 @@ static int paths_for(const char *candidate, char artifact[PATH_MAXIMUM], char hi
 
 static int sha256_file(const char *path, char output[65])
 {
-    rictus_sha256_t context;
-    unsigned char digest[32], buffer[8192];
+    EVP_MD_CTX *context = NULL;
+    unsigned char digest[EVP_MAX_MD_SIZE], buffer[8192];
+    unsigned int digest_length = 0, i;
     FILE *file = NULL;
     size_t count;
-    unsigned int i;
+    int ok = 0;
 
-    if (fopen_s(&file, path, "rb") != 0 || file == NULL) return 0;
-    rictus_sha256_init(&context);
+    context = EVP_MD_CTX_new();
+    if (context == NULL) goto done;
+    if (EVP_DigestInit_ex(context, EVP_sha256(), NULL) != 1) goto done;
+    if (fopen_s(&file, path, "rb") != 0 || file == NULL) goto done;
     while ((count = fread(buffer, 1, sizeof(buffer), file)) > 0)
-        rictus_sha256_update(&context, buffer, count);
-    if (ferror(file)) { fclose(file); return 0; }
-    rictus_sha256_final(&context, digest);
-    fclose(file);
-    for (i = 0; i < 32; ++i) snprintf(output + i * 2, 3, "%02x", digest[i]);
+        if (EVP_DigestUpdate(context, buffer, count) != 1) goto done;
+    if (ferror(file)) goto done;
+    if (EVP_DigestFinal_ex(context, digest, &digest_length) != 1 || digest_length != 32) goto done;
+    for (i = 0; i < digest_length; ++i) snprintf(output + i * 2, 3, "%02x", digest[i]);
     output[64] = '\0';
-    return 1;
+    ok = 1;
+
+done:
+    if (file != NULL) fclose(file);
+    EVP_MD_CTX_free(context);
+    return ok;
 }
 
 static int retain_hash(const char *candidate, const char *event, const char *timestamp,
