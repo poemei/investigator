@@ -517,7 +517,7 @@ static rictus_module_result_t qualify(rictus_module_qualification_result_t *resu
         int test_passed = !!(x); \
         ++executed; \
         if (test_passed) ++passed; \
-        else { ++failed; fprintf(stderr, "[INVESTIGATION] Qualification failed: %s\n", (name)); } \
+        else { ++failed; printf("[INVESTIGATION] Qualification failed: %s\n", (name)); fflush(stdout); } \
     } while (0)
     if (!result) return RICTUS_MODULE_ERR_INVALID_ARGUMENT;
     TEST_N("ABI major", RICTUS_MODULE_API_MAJOR == 1);
@@ -556,7 +556,7 @@ static rictus_module_result_t qualify(rictus_module_qualification_result_t *resu
     result->negative_test_executed = 1;
     result->negative_test_passed = failed == 0;
     if (failed != 0)
-        fprintf(stderr, "[INVESTIGATION] Qualification result: %u/%u passed, %u failed.\n", passed, executed, failed);
+        printf("[INVESTIGATION] Qualification result: %u/%u passed, %u failed.\n", passed, executed, failed), fflush(stdout);
     return executed >= RICTUS_MODULE_MIN_TESTS && failed == 0 ? RICTUS_MODULE_OK : RICTUS_MODULE_ERR_QUALIFICATION;
 }
 
