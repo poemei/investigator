@@ -527,7 +527,7 @@ static rictus_module_result_t qualify(rictus_module_qualification_result_t *resu
     if (!result) return RICTUS_MODULE_ERR_INVALID_ARGUMENT;
 
     TEST(RICTUS_MODULE_API_MAJOR == 1);
-    TEST(RICTUS_MODULE_API_MINOR == 4);
+    TEST(RICTUS_MODULE_API_MINOR == 5);
     TEST(valid_id("INT-CB934528", "INT-"));
     TEST(!valid_id("CB934528", "INT-"));
     TEST(valid_id("CAN-12345678", "CAN-"));
