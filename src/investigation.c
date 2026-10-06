@@ -23,6 +23,9 @@
 #define RELATION_PATH OUTPUT_DIR "/evidence-relationships.tsv"
 #define NOTICE_PATH OUTPUT_DIR "/material-change.notices"
 #define NOTICE_DELIVERED_PATH OUTPUT_DIR "/material-change.delivered"
+#define ASSIGNMENT_SPOOL_PATH "state/intelligence/assignments.pending"
+#define ASSIGNMENT_RESULT_PATH "state/intelligence/assignments.results"
+#define ASSIGNMENT_PROCESSED_PATH OUTPUT_DIR "/assignments.processed"
 #define LINE_MAXIMUM 65536
 #define PATH_MAXIMUM 1024
 
@@ -333,6 +336,74 @@ static void scan_watch(const char *intel_id,const char *candidate)
 }
 
 static void scan_active_watches(void){FILE *f=NULL;char line[256];if(((f = fopen(INDEX_PATH, "r")) == NULL)||!f){notice_drain();return;}while(fgets(line,sizeof(line),f)){char intel[32],candidate[32],state[16];if(sscanf(line,"%31s\t%31s\t%15s",intel,candidate,state)==3&&strcasecmp(state,"ACTIVE")==0)scan_watch(intel,candidate);}fclose(f);notice_drain();}
+
+static int assignment_processed(const char *assignment_id)
+{
+    FILE *file=NULL;char line[128];
+    if(((file=fopen(ASSIGNMENT_PROCESSED_PATH,"r"))==NULL)||!file)return 0;
+    while(fgets(line,sizeof(line),file)){
+        line[strcspn(line,"\r\n")]='\0';
+        if(strcasecmp(line,assignment_id)==0){fclose(file);return 1;}
+    }
+    fclose(file);return 0;
+}
+
+static int assignment_result(const char *assignment_id,const char *status)
+{
+    FILE *file=fopen(ASSIGNMENT_RESULT_PATH,"a");
+    if(!file)return 0;
+    if(fprintf(file,"%s\t%s\n",assignment_id,status)<0||fflush(file)!=0){
+        fclose(file);return 0;
+    }
+    return fclose(file)==0;
+}
+
+static int assignment_mark_processed(const char *assignment_id)
+{
+    FILE *file=fopen(ASSIGNMENT_PROCESSED_PATH,"a");
+    if(!file)return 0;
+    if(fprintf(file,"%s\n",assignment_id)<0||fflush(file)!=0){
+        fclose(file);return 0;
+    }
+    return fclose(file)==0;
+}
+
+static void process_website_assignments(void)
+{
+    FILE *file=NULL;char line[512];
+    if(((file=fopen(ASSIGNMENT_SPOOL_PATH,"r"))==NULL)||!file)return;
+    while(fgets(line,sizeof(line),file)){
+        char assignment[128],type[64],intel[128],candidate[32];
+        int created,watched,ok=0;
+        if(sscanf(line,"%127[^\t]\t%63[^\t]\t%127[^\r\n]",assignment,type,intel)!=3)continue;
+        if(assignment_processed(assignment))continue;
+        if(!valid_id(intel,"INT-")||(strcasecmp(type,"WATCH")!=0&&strcasecmp(type,"INVESTIGATE")!=0)){
+            if(assignment_result(assignment,"FAILED"))(void)assignment_mark_processed(assignment);
+            continue;
+        }
+
+        created=rictus_investigation_candidate_create(intel);
+        if(created!=RICTUS_INVESTIGATION_OK&&created!=RICTUS_INVESTIGATION_ALREADY_EXISTS){
+            if(assignment_result(assignment,"FAILED"))(void)assignment_mark_processed(assignment);
+            continue;
+        }
+
+        candidate_id_for(intel,candidate);
+        watched=rictus_investigation_watch_start(candidate);
+        if(watched==RICTUS_INVESTIGATION_OK||watched==RICTUS_INVESTIGATION_ALREADY_EXISTS){
+            ok=1;
+            if(strcasecmp(type,"INVESTIGATE")==0){
+                scan_watch(intel,candidate);
+                (void)rictus_investigation_assess(candidate);
+            }
+        }
+
+        if(assignment_result(assignment,ok?"ACTIVE":"FAILED"))
+            (void)assignment_mark_processed(assignment);
+    }
+    fclose(file);
+}
+
 static int investigation_stop_wait(unsigned long milliseconds)
 {
     int stopped;
@@ -360,7 +431,10 @@ static int investigation_stop_wait(unsigned long milliseconds)
 static void *investigation_worker(void *unused)
 {
     (void)unused;
-    while (!investigation_stop_wait(10000UL)) scan_active_watches();
+    while (!investigation_stop_wait(10000UL)) {
+        process_website_assignments();
+        scan_active_watches();
+    }
     return NULL;
 }
 
