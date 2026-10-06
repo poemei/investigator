@@ -559,7 +559,7 @@ static rictus_module_result_t qualify(rictus_module_qualification_result_t *resu
     TEST(strcasecmp(relationship_name(REL_CONTRADICTORY), "CONTRADICTORY") == 0);
     TEST(RICTUS_INVESTIGATION_VERSION_MAJOR == 0);
     TEST(RICTUS_INVESTIGATION_VERSION_MINOR == 3);
-    TEST(RICTUS_INVESTIGATION_VERSION_PATCH == 1);
+    TEST(RICTUS_INVESTIGATION_VERSION_PATCH == 2);
 
     {
         rictus_im_evidence_posture_t posture;
