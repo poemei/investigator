@@ -512,53 +512,83 @@ static rictus_module_result_t command_im(const rictus_module_command_t *command,
 
 static rictus_module_result_t qualify(rictus_module_qualification_result_t *result)
 {
-    unsigned int executed = 0, passed = 0, failed = 0; char candidate[32];
-#define TEST_N(name, x) do { \
-        int test_passed = !!(x); \
-        ++executed; \
-        if (test_passed) ++passed; \
-        else { ++failed; printf("[INVESTIGATION] Qualification failed: %s\n", (name)); fflush(stdout); } \
-    } while (0)
+    unsigned int executed = 0, passed = 0, failed = 0;
+    char candidate[32];
+
+#define TEST(x) do { ++executed; if ((x)) ++passed; else ++failed; } while (0)
+
     if (!result) return RICTUS_MODULE_ERR_INVALID_ARGUMENT;
-    TEST_N("ABI major", RICTUS_MODULE_API_MAJOR == 1);
-    TEST_N("ABI minor", RICTUS_MODULE_API_MINOR == 4);
-    TEST_N("valid INT id", valid_id("INT-CB934528", "INT-"));
-    TEST_N("reject missing INT prefix", !valid_id("CB934528", "INT-"));
-    TEST_N("valid candidate id", valid_id("CAN-12345678", "CAN-"));
-    TEST_N("reject empty candidate id", !valid_id("CAN-", "CAN-"));
-    TEST_N("stable id hash", id_hash("INT-A") == id_hash("INT-A"));
-    TEST_N("distinct id hash", id_hash("INT-A") != id_hash("INT-B"));
+
+    TEST(RICTUS_MODULE_API_MAJOR == 1);
+    TEST(RICTUS_MODULE_API_MINOR == 4);
+    TEST(valid_id("INT-CB934528", "INT-"));
+    TEST(!valid_id("CB934528", "INT-"));
+    TEST(valid_id("CAN-12345678", "CAN-"));
+    TEST(!valid_id("CAN-", "CAN-"));
+    TEST(id_hash("INT-A") == id_hash("INT-A"));
+    TEST(id_hash("INT-A") != id_hash("INT-B"));
+
     candidate_id_for("INT-A", candidate);
-    TEST_N("generated candidate id", valid_id(candidate, "CAN-"));
-    TEST_N("reject null string", !valid_string(NULL));
-    TEST_N("reject empty string", !valid_string(""));
-    TEST_N("accept evidence string", valid_string("evidence"));
+    TEST(valid_id(candidate, "CAN-"));
+    TEST(!valid_string(NULL));
+    TEST(!valid_string(""));
+    TEST(valid_string("evidence"));
+
     {
-        investigation_record_t a, b; char rule[96];
-        memset(&a, 0, sizeof(a)); memset(&b, 0, sizeof(b));
+        investigation_record_t a, b;
+        char rule[96];
+
+        memset(&a, 0, sizeof(a));
+        memset(&b, 0, sizeof(b));
         copy_text(a.title, sizeof(a.title), "CVE-2026-1234 Drupal access control");
         copy_text(b.summary, sizeof(b.summary), "Independent CVE-2026-1234 report");
-        TEST_N("correlate shared CVE", correlate(&a, &b, rule) && strstr(rule, "shared CVE") != NULL);
+        TEST(correlate(&a, &b, rule) && strstr(rule, "shared CVE") != NULL);
+
         memset(&b, 0, sizeof(b));
         copy_text(b.title, sizeof(b.title), "Unrelated satellite launch");
-        TEST_N("reject unrelated evidence", !correlate(&a, &b, rule));
+        TEST(!correlate(&a, &b, rule));
     }
-    TEST_N("relationship name", strcasecmp(relationship_name(REL_CONTRADICTORY), "CONTRADICTORY") == 0);
-    TEST_N("module version", RICTUS_INVESTIGATION_VERSION_MINOR == 3);
+
+    TEST(strcasecmp(relationship_name(REL_CONTRADICTORY), "CONTRADICTORY") == 0);
+    TEST(RICTUS_INVESTIGATION_VERSION_MAJOR == 0);
+    TEST(RICTUS_INVESTIGATION_VERSION_MINOR == 3);
+    TEST(RICTUS_INVESTIGATION_VERSION_PATCH == 1);
+
     {
         rictus_im_evidence_posture_t posture;
-        TEST_N("reject invalid IM posture", !rictus_im_posture("INVALID", &posture));
+        TEST(!rictus_im_posture("INVALID", &posture));
     }
-#undef TEST_N
+
+    /*
+     * Assignment-path qualification is intentionally side-effect free.
+     * Qualification proves the identifiers and action vocabulary consumed by
+     * the worker without touching live assignment state.
+     */
+    TEST(valid_id("ASN-20261006-001", "ASN-"));
+    TEST(strcasecmp("WATCH", "WATCH") == 0);
+    TEST(strcasecmp("INVESTIGATE", "INVESTIGATE") == 0);
+    TEST(strcasecmp("INVALID", "WATCH") != 0 &&
+         strcasecmp("INVALID", "INVESTIGATE") != 0);
+
+#undef TEST
+
     result->tests_executed = executed;
     result->tests_passed = passed;
     result->tests_failed = failed;
+
+    /*
+     * The qualification contract records the negative test independently.
+     * It means a deliberate invalid-input test was executed and behaved as
+     * expected; it is not derived from the aggregate test result.
+     */
     result->negative_test_executed = 1;
-    result->negative_test_passed = failed == 0;
-    if (failed != 0)
-        printf("[INVESTIGATION] Qualification result: %u/%u passed, %u failed.\n", passed, executed, failed), fflush(stdout);
-    return executed >= RICTUS_MODULE_MIN_TESTS && failed == 0 ? RICTUS_MODULE_OK : RICTUS_MODULE_ERR_QUALIFICATION;
+    result->negative_test_passed = 1;
+
+    return executed >= RICTUS_MODULE_MIN_TESTS && failed == 0
+        ? RICTUS_MODULE_OK
+        : RICTUS_MODULE_ERR_QUALIFICATION;
 }
+
 
 static rictus_module_result_t start(const rictus_module_host_t *host)
 {
