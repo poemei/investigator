@@ -8,7 +8,7 @@ LDLIBS := -lcrypto -pthread
 BUILD_DIR := build/linux
 TARGET := $(BUILD_DIR)/investigation.so
 PREFIX ?= /usr/local
-MODULEDIR ?= $(PREFIX)/lib/rictus/modules/investigation
+MODULEDIR ?= $(PREFIX)/bin/rictus/modules/investigation
 DESTDIR ?=
 
 SOURCES := \
