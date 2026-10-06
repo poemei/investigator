@@ -23,8 +23,8 @@
 #define RELATION_PATH OUTPUT_DIR "/evidence-relationships.tsv"
 #define NOTICE_PATH OUTPUT_DIR "/material-change.notices"
 #define NOTICE_DELIVERED_PATH OUTPUT_DIR "/material-change.delivered"
-#define ASSIGNMENT_SPOOL_PATH "state/intelligence/assignments.pending"
-#define ASSIGNMENT_RESULT_PATH "state/intelligence/assignments.results"
+#define ASSIGNMENT_SPOOL_PATH "/var/lib/rictus/state/intelligence/assignments.pending"
+#define ASSIGNMENT_RESULT_PATH "/var/lib/rictus/state/intelligence/assignments.results"
 #define ASSIGNMENT_PROCESSED_PATH OUTPUT_DIR "/assignments.processed"
 #define LINE_MAXIMUM 65536
 #define PATH_MAXIMUM 1024
