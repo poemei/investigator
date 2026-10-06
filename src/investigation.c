@@ -331,7 +331,7 @@ static void notice_drain(void){FILE *f=NULL,*done=NULL;char line[256],id[32],can
 static void scan_watch(const char *intel_id,const char *candidate)
 {
     FILE *f=NULL;char *line;unsigned long row=0,cursor=cursor_get(candidate);investigation_record_t origin,item;if(!load_record(intel_id,&origin))return;line=(char*)malloc(LINE_MAXIMUM);if(!line)return;if(((f = fopen(RECORD_PATH, "r")) == NULL)||!f){free(line);return;}
-    while(fgets(line,LINE_MAXIMUM,f)){char *fields[8],*ctx=NULL,*tok,rule[96],evidence[1200];size_t count=0;++row;if(row<=cursor)continue;line[strcspn(line,"\r\n")]='\0';tok=strtok_r(line,"\t",&ctx);while(tok&&count<8){fields[count++]=tok;tok=strtok_r(NULL,"\t",&ctx);}if(count<7||strcasecmp(fields[0],intel_id)==0)continue;memset(&item,0,sizeof(item));copy_text(item.id,sizeof(item.id),fields[0]);unescape(fields[1],item.source,sizeof(item.source));unescape(fields[2],item.title,sizeof(item.title));unescape(fields[5],item.summary,sizeof(item.summary));if(count==8)unescape(fields[6],item.content,sizeof(item.content));if(correlate(&origin,&item,rule)){snprintf(evidence,sizeof(evidence),"%s | %s | %s",item.id,item.title,item.summary);if(evidence_append_typed(candidate,item.source,item.id,rule,REL_SUPPORTING,evidence)==RICTUS_INVESTIGATION_OK)notice_queue(candidate,item.id,rule);}}
+    while(fgets(line,LINE_MAXIMUM,f)){char *fields[8],*ctx=NULL,*tok,rule[96],evidence[1200];size_t count=0;++row;if(row<=cursor)continue;line[strcspn(line,"\r\n")]='\0';tok=strtok_r(line,"\t",&ctx);while(tok&&count<8){fields[count++]=tok;tok=strtok_r(NULL,"\t",&ctx);}if(count<7||strcasecmp(fields[0],intel_id)==0)continue;memset(&item,0,sizeof(item));copy_text(item.id,sizeof(item.id),fields[0]);unescape(fields[1],item.source,sizeof(item.source));unescape(fields[2],item.title,sizeof(item.title));unescape(fields[5],item.summary,sizeof(item.summary));if(count==8)unescape(fields[6],item.content,sizeof(item.content));if(correlate(&origin,&item,rule)){snprintf(evidence,sizeof(evidence),"%.31s | %.511s | %.599s",item.id,item.title,item.summary);if(evidence_append_typed(candidate,item.source,item.id,rule,REL_SUPPORTING,evidence)==RICTUS_INVESTIGATION_OK)notice_queue(candidate,item.id,rule);}}
     fclose(f);if(row!=cursor)cursor_set(candidate,row);free(line);
 }
 
@@ -449,10 +449,10 @@ static rictus_module_result_t command_candidate(const rictus_module_command_t *c
     if (!command || !reply) return RICTUS_MODULE_ERR_INVALID_ARGUMENT;
     if (!command->arguments[0]) return reply(context, "Usage: !candidate INT-XXXXXXXX") ? RICTUS_MODULE_OK : RICTUS_MODULE_ERR_START_FAILED;
     result = rictus_investigation_candidate_create(command->arguments);
-    if (result == RICTUS_INVESTIGATION_OK) { candidate_id_for(command->arguments, candidate); snprintf(response, sizeof(response), "CANDIDATE CREATED | %s | SOURCE %s", candidate, command->arguments); }
-    else if (result == RICTUS_INVESTIGATION_ALREADY_EXISTS) { index_find(command->arguments, candidate, NULL); snprintf(response, sizeof(response), "CANDIDATE ALREADY EXISTS | %s | SOURCE %s", candidate, command->arguments); }
-    else if (result == RICTUS_INVESTIGATION_NOT_FOUND) snprintf(response, sizeof(response), "CANDIDATE REFUSED | %s | INT NOT FOUND", command->arguments);
-    else snprintf(response, sizeof(response), "CANDIDATE FAILED | %s | RESULT %d", command->arguments, result);
+    if (result == RICTUS_INVESTIGATION_OK) { candidate_id_for(command->arguments, candidate); snprintf(response, sizeof(response), "CANDIDATE CREATED | %s | SOURCE %.31s", candidate, command->arguments); }
+    else if (result == RICTUS_INVESTIGATION_ALREADY_EXISTS) { index_find(command->arguments, candidate, NULL); snprintf(response, sizeof(response), "CANDIDATE ALREADY EXISTS | %s | SOURCE %.31s", candidate, command->arguments); }
+    else if (result == RICTUS_INVESTIGATION_NOT_FOUND) snprintf(response, sizeof(response), "CANDIDATE REFUSED | %.31s | INT NOT FOUND", command->arguments);
+    else snprintf(response, sizeof(response), "CANDIDATE FAILED | %.31s | RESULT %d", command->arguments, result);
     return reply(context, response) ? RICTUS_MODULE_OK : RICTUS_MODULE_ERR_START_FAILED;
 }
 
@@ -462,10 +462,10 @@ static rictus_module_result_t command_watch(const rictus_module_command_t *comma
     if (!command || !reply) return RICTUS_MODULE_ERR_INVALID_ARGUMENT;
     if (!command->arguments[0]) return reply(context, "Usage: !watch CAN-XXXXXXXX") ? RICTUS_MODULE_OK : RICTUS_MODULE_ERR_START_FAILED;
     result = rictus_investigation_watch_start(command->arguments);
-    if (result == RICTUS_INVESTIGATION_OK) snprintf(response, sizeof(response), "WATCH ACTIVE | %s", command->arguments);
-    else if (result == RICTUS_INVESTIGATION_ALREADY_EXISTS) snprintf(response, sizeof(response), "WATCH ALREADY ACTIVE | %s", command->arguments);
-    else if (result == RICTUS_INVESTIGATION_NOT_FOUND) snprintf(response, sizeof(response), "WATCH REFUSED | %s | CANDIDATE NOT FOUND", command->arguments);
-    else snprintf(response, sizeof(response), "WATCH FAILED | %s | RESULT %d", command->arguments, result);
+    if (result == RICTUS_INVESTIGATION_OK) snprintf(response, sizeof(response), "WATCH ACTIVE | %.31s", command->arguments);
+    else if (result == RICTUS_INVESTIGATION_ALREADY_EXISTS) snprintf(response, sizeof(response), "WATCH ALREADY ACTIVE | %.31s", command->arguments);
+    else if (result == RICTUS_INVESTIGATION_NOT_FOUND) snprintf(response, sizeof(response), "WATCH REFUSED | %.31s | CANDIDATE NOT FOUND", command->arguments);
+    else snprintf(response, sizeof(response), "WATCH FAILED | %.31s | RESULT %d", command->arguments, result);
     return reply(context, response) ? RICTUS_MODULE_OK : RICTUS_MODULE_ERR_START_FAILED;
 }
 
