@@ -519,7 +519,7 @@ static rictus_module_result_t qualify(rictus_module_qualification_result_t *resu
         int test_ok = !!(x); \
         ++executed; \
         if (test_ok) ++passed; else ++failed; \
-        fprintf(stderr, "[INVESTIGATION][QUAL] %02u %s | %s\\n", \
+        fprintf(stderr, "[INVESTIGATION][QUAL] %02u %s | %s\n", \
                 executed, test_ok ? "PASS" : "FAIL", #x); \
         fflush(stderr); \
     } while (0)
@@ -615,7 +615,7 @@ static rictus_module_result_t qualify(rictus_module_qualification_result_t *resu
     result->negative_test_passed = 1;
 
     fprintf(stderr,
-            "[INVESTIGATION][QUAL] SUMMARY executed=%u passed=%u failed=%u minimum=%u negative_executed=%d negative_passed=%d\\n",
+            "[INVESTIGATION][QUAL] SUMMARY executed=%u passed=%u failed=%u minimum=%u negative_executed=%d negative_passed=%d\n",
             executed, passed, failed, (unsigned int)RICTUS_MODULE_MIN_TESTS,
             result->negative_test_executed, result->negative_test_passed);
     fflush(stderr);
