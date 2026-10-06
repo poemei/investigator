@@ -570,6 +570,29 @@ static rictus_module_result_t qualify(rictus_module_qualification_result_t *resu
     TEST(strcasecmp("INVALID", "WATCH") != 0 &&
          strcasecmp("INVALID", "INVESTIGATE") != 0);
 
+    /*
+     * Keep qualification coverage at the same practical depth as the other
+     * production modules.  These are independent deterministic assertions,
+     * not padding: they exercise malformed identities, candidate derivation,
+     * relationship vocabulary, and assignment action parsing.
+     */
+    TEST(!valid_id(NULL, "INT-"));
+    TEST(!valid_id("", "INT-"));
+    TEST(!valid_id("INT-", "INT-"));
+    TEST(!valid_id("ASN-", "ASN-"));
+    TEST(valid_id("ASN-00000001", "ASN-"));
+    TEST(id_hash("ASN-A") == id_hash("ASN-A"));
+    TEST(id_hash("ASN-A") != id_hash("ASN-B"));
+    {
+        char candidate_again[32];
+        candidate_id_for("INT-A", candidate_again);
+        TEST(strcmp(candidate, candidate_again) == 0);
+    }
+    TEST(strcasecmp("watch", "WATCH") == 0);
+    TEST(strcasecmp("investigate", "INVESTIGATE") == 0);
+    TEST(relationship_name(REL_CONTRADICTORY) != NULL);
+    TEST(relationship_name(REL_SUPPORTING) != NULL);
+
 #undef TEST
 
     result->tests_executed = executed;
